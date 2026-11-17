@@ -2,6 +2,8 @@
 
 A fast CLI for fuzzy-searching every Claude Code conversation on your machine and jumping straight back into one.
 
+![csearch searching for "docker"](assets/screenshot.svg)
+
 ## How it works
 
 - Reads your local transcripts from `~/.claude/projects/`. Fully offline.
