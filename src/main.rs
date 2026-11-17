@@ -29,18 +29,22 @@ const MIN_SCORE: f64 = 20.0; // hide weaker subsequence matches
 const MAX_START_TRIES: usize = 25; // starting positions tried per match
 const TITLE_LEN: usize = 200;
 
-// 5-row solid block letters for the banner (each glyph is 5 wide).
+// 5-row block letters for the banner. 6 wide with a 2-column counter so
+// letters like R, H and A stay legible.
 const FONT: &[(char, [&str; 5])] = &[
-    ('C', [" ████", "██   ", "██   ", "██   ", " ████"]),
-    ('L', ["██   ", "██   ", "██   ", "██   ", "█████"]),
-    ('A', [" ███ ", "██ ██", "█████", "██ ██", "██ ██"]),
-    ('U', ["██ ██", "██ ██", "██ ██", "██ ██", " ███ "]),
-    ('D', ["████ ", "██ ██", "██ ██", "██ ██", "████ "]),
-    ('E', ["█████", "██   ", "████ ", "██   ", "█████"]),
-    ('S', [" ████", "██   ", " ███ ", "   ██", "████ "]),
-    ('R', ["████ ", "██ ██", "████ ", "██ ██", "██ ██"]),
-    ('H', ["██ ██", "██ ██", "█████", "██ ██", "██ ██"]),
+    ('C', [" █████", "██    ", "██    ", "██    ", " █████"]),
+    ('L', ["██    ", "██    ", "██    ", "██    ", "██████"]),
+    ('A', [" ████ ", "██  ██", "██████", "██  ██", "██  ██"]),
+    ('U', ["██  ██", "██  ██", "██  ██", "██  ██", " ████ "]),
+    ('D', ["█████ ", "██  ██", "██  ██", "██  ██", "█████ "]),
+    ('E', ["██████", "██    ", "█████ ", "██    ", "██████"]),
+    ('S', [" █████", "██    ", " ████ ", "    ██", "█████ "]),
+    ('R', ["█████ ", "██  ██", "█████ ", "██  ██", "██  ██"]),
+    ('H', ["██  ██", "██  ██", "██████", "██  ██", "██  ██"]),
 ];
+
+const ORANGE: Color = Color::Rgb { r: 217, g: 119, b: 87 };
+const SEL_BG: Color = Color::Rgb { r: 45, g: 45, b: 55 };
 
 // ------------------------------------------------------------------ model
 
@@ -394,17 +398,11 @@ fn banner_rows(word: &str) -> Vec<String> {
     rows.into_iter().map(|r| r.trim_end().to_string()).collect()
 }
 
-fn logo() -> Vec<String> {
-    banner_rows("CLAUDE")
-        .into_iter()
-        .zip(banner_rows("SEARCH"))
-        .map(|(a, b)| format!("{a}   {b}"))
-        .collect()
-}
 
 #[derive(Clone, Copy, Default)]
 struct Sty {
     fg: Option<Color>,
+    bg: Option<Color>,
     bold: bool,
     dim: bool,
     reverse: bool,
@@ -414,6 +412,9 @@ fn put(out: &mut impl Write, row: u16, col: u16, text: &str, sty: Sty) -> io::Re
     queue!(out, cursor::MoveTo(col, row))?;
     if let Some(c) = sty.fg {
         queue!(out, style::SetForegroundColor(c))?;
+    }
+    if let Some(c) = sty.bg {
+        queue!(out, style::SetBackgroundColor(c))?;
     }
     if sty.bold {
         queue!(out, style::SetAttribute(Attribute::Bold))?;
@@ -462,100 +463,95 @@ impl App {
     }
 }
 
-fn draw(out: &mut impl Write, app: &App, cols: u16, rows: u16) -> io::Result<(u16, u16)> {
+/// Draws the whole screen. Returns the cursor position and how many result
+/// items fit, so PageUp/PageDown move by a real page.
+fn draw(
+    out: &mut impl Write,
+    app: &App,
+    cols: u16,
+    rows: u16,
+) -> io::Result<(u16, u16, usize)> {
     let width = cols as usize;
-    let bold_cyan = Sty {
-        fg: Some(Color::Cyan),
-        bold: true,
+    let fg = |c: Color| Sty {
+        fg: Some(c),
         ..Sty::default()
     };
     let dim = Sty {
         dim: true,
         ..Sty::default()
     };
-    let reversed = Sty {
-        reverse: true,
-        ..Sty::default()
-    };
-    let magenta = Sty {
-        fg: Some(Color::Magenta),
-        ..Sty::default()
-    };
-    let green = Sty {
-        fg: Some(Color::Green),
-        bold: true,
-        ..Sty::default()
-    };
-    let yellow = Sty {
-        fg: Some(Color::Yellow),
-        ..Sty::default()
-    };
+    let border = fg(Color::DarkGrey);
 
     queue!(out, terminal::Clear(ClearType::All))?;
     let mut row: u16 = 0;
 
-    // Banner
-    let logo = logo();
-    if width >= logo[0].chars().count() + 4 {
-        for line in &logo {
-            put(out, row, 2, line, bold_cyan)?;
+    // Banner: CLAUDE in orange, SEARCH in bold white.
+    let claude = banner_rows("CLAUDE");
+    let search_word = banner_rows("SEARCH");
+    let claude_w = claude[0].chars().count();
+    let gap = 4;
+    if width >= claude_w * 2 + gap + 4 {
+        for (a, b) in claude.iter().zip(&search_word) {
+            put(out, row, 2, a, Sty { bold: true, ..fg(ORANGE) })?;
+            put(out, row, (2 + claude_w + gap) as u16, b, Sty { bold: true, ..fg(Color::White) })?;
             row += 1;
         }
     } else {
-        put(out, row, 2, "CLAUDE SEARCH", bold_cyan)?;
+        put(out, row, 2, "CLAUDE", Sty { bold: true, ..fg(ORANGE) })?;
+        put(out, row, 9, "SEARCH", Sty { bold: true, ..fg(Color::White) })?;
         row += 1;
     }
-    let tagline = format!(
-        "offline fuzzy search  |  {} conversations  |  {} messages",
-        app.sessions.len(),
-        app.sessions.iter().map(|s| s.messages.len()).sum::<usize>()
-    );
+    let total_msgs: usize = app.sessions.iter().map(|s| s.messages.len()).sum();
+    let tagline = format!("{} chats · {} messages · offline", app.sessions.len(), total_msgs);
     put(out, row, 2, &tagline, dim)?;
     row += 2;
 
     // Search box
     let box_w = width.saturating_sub(4).clamp(20, 100);
     let inner = box_w - 2;
-    let label = " search > ";
-    let avail = inner.saturating_sub(label.len() + 1);
+    let prompt = " ❯ ";
+    let prompt_w = 3;
+    let avail = inner.saturating_sub(prompt_w + 1);
     let qchars: Vec<char> = app.query.chars().collect();
     let field: String = if qchars.len() > avail {
         qchars[qchars.len() - avail..].iter().collect()
     } else {
         app.query.clone()
     };
-    let border = format!("+{}+", "-".repeat(inner));
-    put(out, row, 2, &border, magenta)?;
+    let bar = "─".repeat(inner);
+    put(out, row, 2, &format!("╭{bar}╮"), border)?;
     let input_row = row + 1;
-    put(out, input_row, 2, "|", magenta)?;
-    put(out, input_row, 3, label, Sty { bold: true, ..magenta })?;
-    put(out, input_row, 3 + label.len() as u16, &field, Sty::default())?;
-    put(out, input_row, (2 + box_w - 1) as u16, "|", magenta)?;
-    put(out, row + 2, 2, &border, magenta)?;
-    let cursor_x = (3 + label.len() + field.chars().count()).min(width.saturating_sub(2));
+    put(out, input_row, 2, "│", border)?;
+    put(out, input_row, 3, prompt, Sty { bold: true, ..fg(ORANGE) })?;
+    if field.is_empty() {
+        put(out, input_row, (3 + prompt_w) as u16, "type to search…", dim)?;
+    } else {
+        put(out, input_row, (3 + prompt_w) as u16, &field, Sty { bold: true, ..Sty::default() })?;
+    }
+    put(out, input_row, (2 + box_w - 1) as u16, "│", border)?;
+    put(out, row + 2, 2, &format!("╰{bar}╯"), border)?;
+    let cursor_x = (3 + prompt_w + field.chars().count()).min(width.saturating_sub(2));
     row += 4;
 
-    // Status line
-    let status = if app.query.trim().is_empty() {
-        format!(" {} conversations, most recent first ", app.results.len())
+    // Result count
+    let n = app.results.len();
+    let count = if app.query.trim().is_empty() {
+        format!("{n} chats")
     } else {
-        format!(
-            " {} match(es) for '{}' ",
-            app.results.len(),
-            app.query.trim()
-        )
+        format!("{n} {}", if n == 1 { "match" } else { "matches" })
     };
-    let hint = "Up/Down move  Enter resume  Esc quit";
-    put(out, row, 2, &status, reversed)?;
-    if width > status.len() + hint.len() + 6 {
-        put(out, row, (width - hint.len() - 3) as u16, hint, dim)?;
+    put(out, row, 2, &count, Sty { bold: true, ..Sty::default() })?;
+    if app.query.trim().is_empty() {
+        put(out, row, (2 + count.len()) as u16, "  · most recent first", dim)?;
     }
-    row += 1;
+    row += 2;
 
-    // Results: two rows per item (title/folder, snippet/date)
+    // Results: two rows per item.
+    //   ▌ 87  Title of the chat                         ~/folder
+    //         matching snippet...                      2026-11-17
     let footer_row = rows.saturating_sub(1);
     let list_top = row;
-    let visible = (((footer_row as usize).saturating_sub(list_top as usize)) / 2).max(1);
+    let visible = ((footer_row.saturating_sub(1) as usize).saturating_sub(list_top as usize) / 2).max(1);
     let mut top = app.top;
     if app.selected < top {
         top = app.selected;
@@ -564,54 +560,58 @@ fn draw(out: &mut impl Write, app: &App, cols: u16, rows: u16) -> io::Result<(u1
         top = app.selected + 1 - visible;
     }
 
-    let folder_w = (width / 3).clamp(18, 48);
-    let title_w = width.saturating_sub(folder_w + 14).max(10);
-    let end = (top + visible).min(app.results.len());
+    let folder_w = (width / 3).clamp(16, 40);
+    let title_w = width.saturating_sub(folder_w + 12).max(10);
+    let end = (top + visible).min(n);
     for idx in top..end {
         let hit = &app.results[idx];
         let session = &app.sessions[hit.idx];
         let y = list_top + ((idx - top) * 2) as u16;
         let is_sel = idx == app.selected;
-        let base = Sty {
-            reverse: is_sel,
-            ..Sty::default()
-        };
+        let bg = if is_sel { Some(SEL_BG) } else { None };
+        let s = |base: Sty| Sty { bg, ..base };
 
-        let score_txt = match hit.score {
-            None => "  -- ".to_string(),
-            Some(s) => format!("{:4.0}%", s),
-        };
+        let pad = " ".repeat(width);
+        put(out, y, 0, &pad, s(Sty::default()))?;
+        put(out, y + 1, 0, &pad, s(Sty::default()))?;
+        if is_sel {
+            put(out, y, 1, "▌", s(fg(ORANGE)))?;
+            put(out, y + 1, 1, "▌", s(fg(ORANGE)))?;
+        }
+
+        if let Some(score) = hit.score {
+            put(out, y, 3, &format!("{score:>3.0}"), s(fg(Color::Green)))?;
+        }
         let title = fit(&session.title, title_w);
-        let line1_pad = " ".repeat(width);
-        put(out, y, 0, &line1_pad, base)?;
-        put(out, y, 1, &format!(" {score_txt}  "), if is_sel { base } else { green })?;
-        put(out, y, 9, &title, base)?;
+        put(out, y, 8, &title, s(Sty { bold: true, ..Sty::default() }))?;
         let folder = fit_left(&tilde(&session.cwd), folder_w);
-        let folder_col = width.saturating_sub(folder_w + 2) as u16;
-        put(out, y, folder_col, &folder, if is_sel { base } else { yellow })?;
+        let folder_col = width.saturating_sub(folder.chars().count() + 2) as u16;
+        put(out, y, folder_col, &folder, s(fg(Color::Blue)))?;
 
-        let line2_pad = " ".repeat(width);
-        put(out, y + 1, 0, &line2_pad, base)?;
-        let snippet = fit(&hit.snippet, width.saturating_sub(26).max(10));
-        put(out, y + 1, 8, &snippet, if is_sel { base } else { dim })?;
         let date = session.ts.get(..10).unwrap_or("");
+        let snippet = fit(&hit.snippet, width.saturating_sub(8 + date.len() + 4).max(10));
+        put(out, y + 1, 8, &snippet, s(fg(Color::Grey)))?;
         let date_col = width.saturating_sub(date.len() + 2) as u16;
-        put(out, y + 1, date_col, date, if is_sel { base } else { dim })?;
+        put(out, y + 1, date_col, date, s(dim))?;
     }
 
-    if app.results.is_empty() {
-        put(out, list_top, 4, "No matches. Keep typing...", dim)?;
+    if n == 0 {
+        put(out, list_top, 4, "No matches — try fewer or different words.", dim)?;
     }
 
-    // Footer
-    let mut footer = " Enter: resume this chat here | Esc: quit".to_string();
-    if let Some(s) = app.selected_session() {
-        footer.push_str(&format!("   [{}]", tilde(&s.cwd)));
+    // Footer: key hints only.
+    let mut col: u16 = 2;
+    for (key, what) in [("↑↓", "move"), ("enter", "resume"), ("^U", "clear"), ("esc", "quit")] {
+        if col as usize + key.len() + what.len() + 4 > width {
+            break;
+        }
+        put(out, footer_row, col, key, Sty { bold: true, ..fg(ORANGE) })?;
+        col += key.chars().count() as u16 + 1;
+        put(out, footer_row, col, what, dim)?;
+        col += what.len() as u16 + 3;
     }
-    let footer = fit(&footer, width.saturating_sub(1));
-    put(out, footer_row, 0, &footer, reversed)?;
 
-    Ok((cursor_x as u16, input_row))
+    Ok((cursor_x as u16, input_row, visible))
 }
 
 // ------------------------------------------------------------ interactive
@@ -684,13 +684,9 @@ fn run_ui(app: &mut App) -> io::Result<Option<Session>> {
     let mut out = io::stdout();
     loop {
         let (cols, rows) = terminal::size()?;
-        let (cx, cy) = draw(&mut out, app, cols, rows)?;
+        let (cx, cy, visible) = draw(&mut out, app, cols, rows)?;
         queue!(out, cursor::MoveTo(cx, cy))?;
         out.flush()?;
-
-        // Visible item count, needed for PageUp/PageDown.
-        let list_top = if cols as usize >= 78 { 11 } else { 8 };
-        let visible = ((rows as usize).saturating_sub(list_top + 1) / 2).max(1);
 
         if let Event::Key(key) = event::read()? {
             if key.kind != KeyEventKind::Press {
