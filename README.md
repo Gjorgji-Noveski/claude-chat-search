@@ -12,7 +12,7 @@ A fast CLI for fuzzy-searching every Claude Code conversation on your machine an
 
 ## Install
 
-Requires [Rust](https://rustup.rs). Clone the repo and run the install script:
+Requires Rust. Install it with `brew install rust`, or with [rustup](https://rustup.rs) if you prefer. Clone the repo and run the install script:
 
 ```sh
 git clone https://github.com/Gjorgji-Noveski/claude-chat-search.git csearch && cd csearch
